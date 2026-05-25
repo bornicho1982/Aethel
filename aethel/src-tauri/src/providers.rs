@@ -1,5 +1,9 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use rusqlite::Connection;
+use std::sync::Mutex;
+use tauri::State;
+use crate::auth::get_valid_token;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LyricsResult {
@@ -54,25 +58,44 @@ pub async fn fetch_lyrics(artist: String, track: String) -> Result<Option<Lyrics
 }
 
 #[tauri::command]
-pub async fn fetch_cover_art(artist: String, album: String) -> Result<Option<String>, String> {
+pub async fn fetch_cover_art(artist: String, album: String, state: State<'_, Mutex<Connection>>) -> Result<Option<String>, String> {
     let term = format!("{} {}", artist, album);
-    let url = format!(
-        "https://itunes.apple.com/search?term={}&entity=album&limit=1",
+    
+    // 1. Try iTunes API
+    let itunes_url = format!(
+        "https://itunes.apple.com/search?term={}&entity=song&limit=1",
         urlencoding::encode(&term)
     );
+    if let Ok(res) = HTTP_CLIENT.get(&itunes_url).send().await {
+        if res.status().is_success() {
+            if let Ok(data) = res.json::<ItunesResponse>().await {
+                if let Some(first_result) = data.results.first() {
+                    if let Some(url_100) = &first_result.artwork_url_100 {
+                        let hd_url = url_100.replace("100x100bb", "600x600bb");
+                        return Ok(Some(hd_url));
+                    }
+                }
+            }
+        }
+    }
 
-    let res = HTTP_CLIENT
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if res.status().is_success() {
-        let data: ItunesResponse = res.json().await.map_err(|e| e.to_string())?;
-        if let Some(first_result) = data.results.first() {
-            if let Some(url_100) = &first_result.artwork_url_100 {
-                // iTunes returns 100x100 by default. Replace it with 600x600 for HD.
-                let hd_url = url_100.replace("100x100bb", "600x600bb");
-                return Ok(Some(hd_url));
+    // 2. Try Spotify API as fallback
+    if let Ok(token) = get_valid_token("spotify", &state).await {
+        let spotify_url = format!(
+            "https://api.spotify.com/v1/search?q={}&type=track&limit=1",
+            urlencoding::encode(&term)
+        );
+        if let Ok(res) = HTTP_CLIENT.get(&spotify_url).bearer_auth(token).send().await {
+            if res.status().is_success() {
+                if let Ok(json) = res.json::<serde_json::Value>().await {
+                    if let Some(url) = json["tracks"]["items"].as_array()
+                        .and_then(|items| items.first())
+                        .and_then(|item| item["album"]["images"].as_array())
+                        .and_then(|images| images.first())
+                        .and_then(|image| image["url"].as_str()) {
+                            return Ok(Some(url.to_string()));
+                    }
+                }
             }
         }
     }

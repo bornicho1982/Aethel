@@ -50,5 +50,18 @@ pub fn init_db<P: AsRef<Path>>(db_path: P) -> Result<Connection> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS oauth_tokens (
+            provider TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            expires_at INTEGER NOT NULL,
+            updated_at INTEGER DEFAULT (cast(strftime('%s','now') as int)),
+            account_name TEXT,
+            account_picture TEXT
+        )",
+        [],
+    )?;
+
     Ok(conn)
 }

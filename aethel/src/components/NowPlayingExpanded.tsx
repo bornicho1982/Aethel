@@ -173,7 +173,25 @@ export const NowPlayingExpanded: React.FC = () => {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '24px', marginTop: '16px' }}>
             <Heart size={24} className="control-btn" />
-            <FileText size={24} className={`control-btn ${currentLyrics ? 'active' : ''}`} style={{ color: currentLyrics ? 'var(--color-accent-primary)' : '' }} />
+            <FileText 
+              size={24} 
+              className={`control-btn ${currentLyrics ? 'active' : ''}`} 
+              style={{ color: currentLyrics ? 'var(--color-accent-primary)' : 'var(--color-text-primary)' }} 
+              onClick={async () => {
+                if (currentLyrics) {
+                  usePlayerStore.setState({ currentLyrics: null });
+                } else if (currentTrack) {
+                  try {
+                    const { getLyrics } = await import('../lib/api');
+                    usePlayerStore.setState({ currentLyrics: 'Buscando letra...' });
+                    const lyrics = await getLyrics(currentTrack.title, currentTrack.artist);
+                    usePlayerStore.setState({ currentLyrics: lyrics });
+                  } catch (e) {
+                    usePlayerStore.setState({ currentLyrics: 'Letra no encontrada.' });
+                  }
+                }
+              }}
+            />
             <Maximize2 size={24} className="control-btn" />
           </div>
         </div>

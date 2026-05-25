@@ -6,6 +6,9 @@ mod scanner;
 mod server;
 mod importer;
 mod dashboard;
+mod auth;
+pub mod api_providers;
+mod secrets;
 
 use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
@@ -388,8 +391,17 @@ pub fn run() {
             notifications::notify_track,
             // Dashboard
             dashboard::get_global_mixer,
-            dashboard::get_deezer_charts,
             dashboard::get_youtube_trends,
+            auth::get_auth_statuses,
+            auth::authenticate_provider,
+            auth::disconnect_provider,
+            auth::save_lastfm_username,
+            api_providers::get_spotify_top_tracks,
+            api_providers::get_spotify_playlists,
+            api_providers::get_lastfm_global_charts,
+            api_providers::get_lastfm_user_top_tracks,
+            api_providers::get_youtube_liked_music,
+            api_providers::get_lyrics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

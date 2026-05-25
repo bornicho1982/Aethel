@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Activity, Clock, Flame, Zap, Crosshair, PartyPopper, CloudRain, Play, User, X, Disc3, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Activity, Clock, Flame, Zap, Crosshair, PartyPopper, CloudRain, Play, User, X, Disc3, ChevronLeft, ChevronRight, Music, Radio, History, Mic2, Coffee, Moon, Sun, Sparkles } from 'lucide-react';
+import { SmartCover } from './SmartCover';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { getTopTracks, TrackData, Playlist, getPlaylists, getGlobalMixer, getDeezerCharts, getYouTubeTrends, getYouTubeMoods, DashboardTrack, cleanTitle, searchYouTube } from '../lib/api';
+import { invoke } from '@tauri-apps/api/core';
+import { getTopTracks, TrackData, Playlist, getPlaylists, getGlobalMixer, getYouTubeTrends, getYouTubeMoods, DashboardTrack, cleanTitle, searchYouTube, getSpotifyTopTracks, getSpotifyPlaylists, getLastfmGlobalCharts, getLastfmUserTopTracks, getYoutubeLikedMusic, UnifiedMediaItem } from '../lib/api';
 import { usePlayerStore } from '../store/usePlayerStore';
 
 // Skeletons
@@ -17,34 +19,8 @@ const SkeletonCard = () => (
   </div>
 );
 
-// Fallback image utility
-const CoverImage = ({ src, alt, size = '100%', isVideo = false }: { src?: string | null, alt: string, size?: string | number, isVideo?: boolean }) => {
-  const [error, setError] = useState(false);
-  if (!src || error) {
-    return (
-      <div style={{
-        width: size, aspectRatio: isVideo ? '16/9' : '1/1',
-        background: 'linear-gradient(135deg, var(--color-accent-tertiary), var(--color-bg-base))',
-        borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center'
-      }}>
-        <Disc3 size={32} opacity={0.5} />
-      </div>
-    );
-  }
-  const finalSrc = src?.startsWith('http') ? src : (src ? convertFileSrc(src) : undefined);
-
-  return (
-    <img 
-      src={finalSrc} 
-      alt={alt} 
-      onError={() => setError(true)}
-      style={{ width: size, aspectRatio: isVideo ? '16/9' : '1/1', objectFit: 'cover', borderRadius: '8px', boxShadow: '0 8px 16px rgba(0,0,0,0.3)' }}
-    />
-  );
-};
-
 // Scroll Arrow Utility
-const ScrollArrows = ({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) => {
+const ScrollArrows = ({ containerRef }: { containerRef: React.RefObject<HTMLDivElement | null> }) => {
   const scroll = (offset: number) => {
     if (containerRef.current) {
       containerRef.current.scrollBy({ left: offset, behavior: 'smooth' });
@@ -70,16 +46,19 @@ export const Dashboard: React.FC = () => {
   // Remote Data
   const [mixerTracks, setMixerTracks] = useState<DashboardTrack[]>([]);
   const [trendTracks, setTrendTracks] = useState<DashboardTrack[]>([]);
-  const [deezerTracks, setDeezerTracks] = useState<DashboardTrack[]>([]);
+  const [lastfmTracks, setLastfmTracks] = useState<DashboardTrack[]>([]);
   
   const [isMixerLoading, setIsMixerLoading] = useState(true);
   const [isTrendsLoading, setIsTrendsLoading] = useState(true);
-  const [isDeezerLoading, setIsDeezerLoading] = useState(true);
+  const [isLastfmLoading, setIsLastfmLoading] = useState(true);
   
   // Moods
   const [activeMood, setActiveMood] = useState<string | null>(null);
   const [moodTracks, setMoodTracks] = useState<DashboardTrack[]>([]);
   const [isMoodLoading, setIsMoodLoading] = useState(false);
+
+  // Auth
+  const [authStatuses, setAuthStatuses] = useState<any[]>([]);
 
   // Modals
   const [artistModal, setArtistModal] = useState<string | null>(null);
@@ -90,7 +69,7 @@ export const Dashboard: React.FC = () => {
   const mixerRef = useRef<HTMLDivElement>(null);
   const moodsRef = useRef<HTMLDivElement>(null);
   const trendsRef = useRef<HTMLDivElement>(null);
-  const deezerRef = useRef<HTMLDivElement>(null);
+  const lastfmRef = useRef<HTMLDivElement>(null);
 
   const { setCurrentTrack } = usePlayerStore();
 
@@ -111,20 +90,83 @@ export const Dashboard: React.FC = () => {
     };
     
     const loadRemote = async () => {
-      getGlobalMixer()
-        .then(res => setMixerTracks(res))
-        .catch(e => { console.error('GlobalMixer error:', e); setMixerTracks([]); })
-        .finally(() => setIsMixerLoading(false));
+      try {
+        const statuses = await invoke<any[]>('get_auth_statuses');
+        setAuthStatuses(statuses);
+        const spotifyStatus = statuses.find(s => s.provider === 'spotify');
+        const lastfmStatus = statuses.find(s => s.provider === 'lastfm');
+        const youtubeStatus = statuses.find(s => s.provider === 'youtube');
+
+        const mapUnified = (u: UnifiedMediaItem): DashboardTrack => ({
+          id: u.id,
+          title: u.title,
+          artist: u.artist || 'Unknown',
+          platform: u.platform,
+          cover_url: u.cover_url || ''
+        });
+
+        // 1. Fetch all data independently
+        let spTracks: DashboardTrack[] = [];
+        let ytTracks: DashboardTrack[] = [];
+        let lfTracks: DashboardTrack[] = [];
+
+        if (spotifyStatus?.connected) {
+          try {
+            const sp = await getSpotifyTopTracks();
+            spTracks = sp.map(mapUnified);
+          } catch (e) { console.error("Spotify failed", e); }
+        }
+
+        if (youtubeStatus?.connected) {
+          try {
+            const yt = await getYoutubeLikedMusic();
+            ytTracks = yt.map(mapUnified);
+          } catch (e) { console.error("YouTube failed", e); }
+        } else {
+          try {
+            ytTracks = await getYouTubeTrends();
+          } catch (e) { console.error("YouTube fallback failed", e); }
+        }
+
+        try {
+          const lf = lastfmStatus?.connected && lastfmStatus?.accountName 
+              ? await getLastfmUserTopTracks(lastfmStatus.accountName)
+              : await getLastfmGlobalCharts();
+          lfTracks = lf.map(mapUnified);
+        } catch (e) { console.error("Last.fm failed", e); }
+
+        // Update individual carousels
+        setTrendTracks(ytTracks);
+        setIsTrendsLoading(false);
+
+        setLastfmTracks(lfTracks);
+        setIsLastfmLoading(false);
+
+        // Missing covers will now be fetched automatically by SmartCover components on render.
+
+        // 2. Build the true Global Mixer
+        let mixed: DashboardTrack[] = [];
+        const maxLen = Math.max(spTracks.length, ytTracks.length, lfTracks.length);
         
-      getYouTubeTrends()
-        .then(res => setTrendTracks(res))
-        .catch(e => { console.error('Trends error:', e); setTrendTracks([]); })
-        .finally(() => setIsTrendsLoading(false));
-        
-      getDeezerCharts()
-        .then(res => setDeezerTracks(res))
-        .catch(e => { console.error('Deezer error:', e); setDeezerTracks([]); })
-        .finally(() => setIsDeezerLoading(false));
+        for (let i = 0; i < maxLen; i++) {
+          if (spTracks[i]) mixed.push(spTracks[i]);
+          if (ytTracks[i]) mixed.push(ytTracks[i]);
+          if (lfTracks[i]) mixed.push(lfTracks[i]);
+        }
+
+        // 3. Fallback to local mixer if nothing remote was found
+        if (mixed.length === 0) {
+          try {
+            mixed = await getGlobalMixer();
+          } catch (e) { console.error("Local mixer failed", e); }
+        }
+
+        setMixerTracks(mixed);
+        setIsMixerLoading(false);
+
+      } catch (err) {
+        console.error("Error loading remote info:", err);
+      }
     };
 
     loadLocal();
@@ -183,7 +225,7 @@ export const Dashboard: React.FC = () => {
   const getPlatformIcon = (platform: string) => {
     if (platform === 'Spotify') return <div style={{width: 12, height: 12, borderRadius: '50%', background: '#1DB954'}} title="Spotify" />;
     if (platform === 'YouTube Music') return <div style={{width: 12, height: 12, borderRadius: '50%', background: '#FF0000'}} title="YouTube Music" />;
-    if (platform === 'Deezer') return <div style={{width: 12, height: 12, borderRadius: '50%', background: '#FEAA2D'}} title="Deezer" />;
+    if (platform === 'Last.fm') return <div style={{width: 12, height: 12, borderRadius: '50%', background: '#FFB300'}} title="Last.fm" />;
     return <div style={{width: 12, height: 12, borderRadius: '50%', background: '#888'}} />;
   };
 
@@ -201,7 +243,7 @@ export const Dashboard: React.FC = () => {
       <div style={{ position: 'absolute', top: '24px', right: '24px', zIndex: 2 }}>
         {getPlatformIcon(t.platform)}
       </div>
-      <CoverImage src={t.cover_url} alt={t.title} isVideo={isVideo} />
+      <SmartCover src={t.cover_url} alt={t.title} artist={t.artist} title={t.title} isVideo={isVideo} />
       <div>
         <h3 style={{ fontSize: '1.05rem', margin: '0 0 4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={cleanTitle(t.title)}>
           {cleanTitle(t.title)}
@@ -273,7 +315,7 @@ export const Dashboard: React.FC = () => {
                     }
                   }}
                 >
-                  <CoverImage src={p.cover_url} alt={p.name} size="40px" />
+                  <SmartCover src={p.cover_url} alt={p.name} artist={undefined} title={p.name} size="40px" />
                   <div style={{ overflow: 'hidden' }}>
                     <h4 style={{ margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</h4>
                     <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Playlist</span>
@@ -288,13 +330,13 @@ export const Dashboard: React.FC = () => {
       {/* ROW 1: Global Mixer */}
       <section>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Activity size={24} color="var(--color-accent-primary)" />
-            <h2 style={{ margin: 0, fontSize: '1.5rem' }}>El Mezclador Global</h2>
-          </div>
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Activity color="var(--color-accent-primary)" />
+            {authStatuses.find(s => s.provider === 'spotify')?.connected ? 'Tus Top Tracks (Spotify)' : 'El Mezclador Global'}
+          </h2>
           <ScrollArrows containerRef={mixerRef} />
         </div>
-        <p style={{ color: 'var(--color-text-secondary)', marginBottom: '24px', fontSize: '0.95rem' }}>Éxitos del momento intercalados (Spotify, YouTube, Deezer).</p>
+        <p style={{ color: 'var(--color-text-secondary)', marginBottom: '24px', fontSize: '0.95rem' }}>Éxitos del momento intercalados (Spotify, YouTube, Last.fm).</p>
         
         <div ref={mixerRef} style={{ display: 'flex', gap: '20px', overflowX: 'auto', paddingBottom: '16px', scrollbarWidth: 'none' }}>
           {isMixerLoading 
@@ -354,10 +396,10 @@ export const Dashboard: React.FC = () => {
       {/* ROW 3: YouTube Trends */}
       <section>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Flame size={24} color="#FF0000" />
-            <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Tendencias en Vídeo</h2>
-          </div>
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Flame color="#FF0000" />
+            {authStatuses.find(s => s.provider === 'youtube')?.connected ? 'Tu Música Favorita (YouTube Music)' : 'Tendencias en Vídeo'}
+          </h2>
           <ScrollArrows containerRef={trendsRef} />
         </div>
         
@@ -370,21 +412,23 @@ export const Dashboard: React.FC = () => {
         </div>
       </section>
 
-      {/* ROW 4: Deezer Top Charts */}
+      {/* ROW 4: Last.fm Top Charts */}
       <section>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Clock size={24} color="#FEAA2D" />
-            <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Listas de Éxitos Deezer</h2>
-          </div>
-          <ScrollArrows containerRef={deezerRef} />
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Zap color="#D51007" />
+            {authStatuses.find(s => s.provider === 'lastfm')?.connected && authStatuses.find(s => s.provider === 'lastfm')?.accountName 
+              ? `Tus Artistas Más Escuchados` 
+              : 'Top Global (Last.fm)'}
+          </h2>
+          <ScrollArrows containerRef={lastfmRef} />
         </div>
         
-        <div ref={deezerRef} style={{ display: 'flex', gap: '20px', overflowX: 'auto', paddingBottom: '16px', scrollbarWidth: 'none' }}>
-          {isDeezerLoading 
+        <div ref={lastfmRef} style={{ display: 'flex', gap: '20px', overflowX: 'auto', paddingBottom: '16px', scrollbarWidth: 'none' }}>
+          {isLastfmLoading 
             ? Array.from({length: 6}).map((_, i) => <SkeletonCard key={i} />)
-            : deezerTracks.length === 0 ? <p style={{color: 'var(--color-text-secondary)'}}>No se pudieron cargar los éxitos.</p>
-            : deezerTracks.map(t => renderDashboardCard(t))
+            : lastfmTracks.length === 0 ? <p style={{color: 'var(--color-text-secondary)'}}>No se pudieron cargar los éxitos.</p>
+            : lastfmTracks.map(t => renderDashboardCard(t))
           }
         </div>
       </section>
@@ -444,7 +488,7 @@ export const Dashboard: React.FC = () => {
                       style={{ padding: '12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer' }}
                     >
                       <div style={{ width: '30px', color: 'var(--color-text-secondary)', textAlign: 'right', fontWeight: 600 }}>{idx + 1}</div>
-                      <CoverImage src={t.thumbnailUrl} alt={t.title} size="48px" />
+                      <SmartCover src={t.thumbnailUrl} alt={t.title} artist={undefined} title={t.title} size="48px" />
                       <div style={{ flex: 1, overflow: 'hidden' }}>
                         <h4 style={{ margin: '0 0 4px 0', fontSize: '1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cleanTitle(t.title)}</h4>
                         <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>{t.duration || '0:00'}</span>

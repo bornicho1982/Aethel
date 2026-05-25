@@ -79,6 +79,50 @@ export const searchYouTube = async (query: string): Promise<YouTubeSearchResult[
   }
 };
 
+// Búsqueda en YouTube local (Rust fallback)
+export const searchYoutubeMusic = async (query: string): Promise<DashboardTrack[]> => {
+  try {
+    const results = await invoke<DashboardTrack[]>('get_youtube_trends', { query });
+    return results;
+  } catch (error) {
+    console.error('Error fetching youtube search:', error);
+    return [];
+  }
+};
+
+export interface UnifiedMediaItem {
+  id: string;
+  title: string;
+  artist?: string;
+  cover_url?: string;
+  platform: string;
+  item_type: string;
+}
+
+export const getSpotifyTopTracks = async (): Promise<UnifiedMediaItem[]> => {
+  return await invoke<UnifiedMediaItem[]>('get_spotify_top_tracks');
+};
+
+export const getSpotifyPlaylists = async (): Promise<UnifiedMediaItem[]> => {
+  return invoke('get_spotify_playlists');
+};
+
+export const getLastfmGlobalCharts = async (): Promise<UnifiedMediaItem[]> => {
+  return invoke('get_lastfm_global_charts');
+};
+
+export const getLastfmUserTopTracks = async (username: string): Promise<UnifiedMediaItem[]> => {
+  return invoke('get_lastfm_user_top_tracks', { username });
+};
+
+export const getYoutubeLikedMusic = async (): Promise<UnifiedMediaItem[]> => {
+  return invoke('get_youtube_liked_music');
+};
+
+export const getLyrics = async (title: string, artist: string): Promise<string> => {
+  return invoke('get_lyrics', { title, artist });
+};
+
 export interface LyricsData {
   id?: number;
   trackName?: string;
@@ -176,37 +220,11 @@ export interface DashboardTrack {
 
 export const getGlobalMixer = async (): Promise<DashboardTrack[]> => {
   try {
-    const [ytRes, deezerRes] = await Promise.all([
-      invoke<any[]>('search_youtube', { query: 'global top 50 songs' }).catch(() => []),
-      invoke<DashboardTrack[]>('get_deezer_charts').catch(() => [])
-    ]);
-    
-    const mixed: DashboardTrack[] = [];
-    const maxLength = Math.max(ytRes.length, deezerRes.length);
-    
-    for (let i = 0; i < Math.min(maxLength, 20); i++) {
-      if (i < ytRes.length) {
-        mixed.push({
-          id: `mix_yt_${i}_${ytRes[i].id}`,
-          title: ytRes[i].title,
-          artist: ytRes[i].channel || 'YouTube',
-          platform: 'YouTube Music',
-          cover_url: ytRes[i].thumbnail || null,
-        });
-      }
-      if (i < deezerRes.length) {
-        mixed.push(deezerRes[i]);
-      }
-    }
-    return mixed;
+    return await invoke<DashboardTrack[]>('get_global_mixer');
   } catch (e) {
     console.error('Global mixer error:', e);
     return [];
   }
-};
-
-export const getDeezerCharts = async (): Promise<DashboardTrack[]> => {
-  return await invoke<DashboardTrack[]>('get_deezer_charts');
 };
 
 export const getYouTubeTrends = async (): Promise<DashboardTrack[]> => {

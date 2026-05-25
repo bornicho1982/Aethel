@@ -14,7 +14,7 @@ pub struct DashboardTrack {
 
 pub struct DashboardCache {
     pub global_mixer: Mutex<Option<(Instant, Vec<DashboardTrack>)>>,
-    pub deezer_charts: Mutex<Option<(Instant, Vec<DashboardTrack>)>>,
+    pub lastfm_charts: Mutex<Option<(Instant, Vec<DashboardTrack>)>>,
     pub youtube_trends: Mutex<Option<(Instant, Vec<DashboardTrack>)>>,
 }
 
@@ -22,7 +22,7 @@ impl DashboardCache {
     pub fn new() -> Self {
         Self {
             global_mixer: Mutex::new(None),
-            deezer_charts: Mutex::new(None),
+            lastfm_charts: Mutex::new(None),
             youtube_trends: Mutex::new(None),
         }
     }
@@ -47,17 +47,17 @@ pub async fn get_global_mixer(state: tauri::State<'_, DashboardCache>) -> Result
     // 2. Fetch YouTube Music Top Tracks (Using a generic YT Music trending playlist or charts)
     let yt_future = crate::importer::import_from_url("https://music.youtube.com/playlist?list=RDCLAK5uy_l4p2D305z6uV0G5p8fQzB-hE2x4zQ0Z8U");
     
-    // 3. Fetch Deezer Top Tracks (Using API directly since importer supports it but API is easier for tracks)
-    let deezer_future = get_deezer_charts_direct();
+    // 3. Fetch Last.fm Top Tracks
+    let lastfm_future = get_lastfm_charts_direct();
 
     // Run them in parallel
-    let (spotify_res, yt_res, deezer_res) = tokio::join!(spotify_future, yt_future, deezer_future);
+    let (spotify_res, yt_res, lastfm_res) = tokio::join!(spotify_future, yt_future, lastfm_future);
 
     let mut mixed_tracks = Vec::new();
     
     let mut spotify_tracks = spotify_res.unwrap_or_else(|_| crate::importer::ImportedPlaylist { name: "".into(), cover_url: None, tracks: vec![] }).tracks.into_iter();
     let mut yt_tracks = yt_res.unwrap_or_else(|_| crate::importer::ImportedPlaylist { name: "".into(), cover_url: None, tracks: vec![] }).tracks.into_iter();
-    let mut deezer_tracks = deezer_res.unwrap_or_else(|_| vec![]).into_iter();
+    let mut lastfm_tracks = lastfm_res.unwrap_or_else(|_| vec![]).into_iter();
 
     // Interleave
     for i in 0..20 {
@@ -79,7 +79,7 @@ pub async fn get_global_mixer(state: tauri::State<'_, DashboardCache>) -> Result
                 cover_url: None,
             });
         }
-        if let Some(track) = deezer_tracks.next() {
+        if let Some(track) = lastfm_tracks.next() {
             mixed_tracks.push(track);
         }
     }
@@ -92,50 +92,34 @@ pub async fn get_global_mixer(state: tauri::State<'_, DashboardCache>) -> Result
     Ok(mixed_tracks)
 }
 
-async fn get_deezer_charts_direct() -> Result<Vec<DashboardTrack>, String> {
-    let client = Client::new();
-    let res = client.get("https://api.deezer.com/chart/0/tracks")
+async fn get_lastfm_charts_direct() -> Result<Vec<DashboardTrack>, String> {
+    let client = reqwest::Client::new();
+    let api_key = crate::secrets::LASTFM_API_KEY;
+    let res = client.get(format!("http://ws.audioscrobbler.com/2.0/?method=chart.gettoptracks&api_key={}&format=json&limit=20", api_key))
         .send().await.map_err(|e| e.to_string())?;
     
     let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
     
     let mut tracks = Vec::new();
-    if let Some(data) = json["data"].as_array() {
+    if let Some(data) = json["tracks"]["track"].as_array() {
         for (i, item) in data.iter().enumerate() {
-            let title = item["title"].as_str().unwrap_or("Unknown").to_string();
+            let title = item["name"].as_str().unwrap_or("Unknown").to_string();
             let artist = item["artist"]["name"].as_str().unwrap_or("Unknown").to_string();
-            let cover_url = item["album"]["cover_medium"].as_str().map(|s| s.to_string());
+            let cover_url = item["image"].as_array()
+                .and_then(|imgs| imgs.last())
+                .and_then(|img| img["#text"].as_str())
+                .map(|s| s.to_string());
+                
             tracks.push(DashboardTrack {
-                id: format!("deez_{}", i),
+                id: format!("lastfm_{}", i),
                 title,
                 artist,
-                platform: "Deezer".to_string(),
+                platform: "Last.fm".to_string(),
                 cover_url,
             });
         }
     }
     
-    Ok(tracks)
-}
-
-#[tauri::command]
-pub async fn get_deezer_charts(state: tauri::State<'_, DashboardCache>) -> Result<Vec<DashboardTrack>, String> {
-    {
-        let cache = state.deezer_charts.lock().map_err(|e| e.to_string())?;
-        if let Some((time, data)) = &*cache {
-            if time.elapsed() < CACHE_TTL {
-                return Ok(data.clone());
-            }
-        }
-    }
-
-    let tracks = get_deezer_charts_direct().await?;
-
-    {
-        let mut cache = state.deezer_charts.lock().map_err(|e| e.to_string())?;
-        *cache = Some((Instant::now(), tracks.clone()));
-    }
-
     Ok(tracks)
 }
 
